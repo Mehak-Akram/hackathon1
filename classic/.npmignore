@@ -1,0 +1,28 @@
+# npmignore for Docusaurus project
+
+# Dependencies
+node_modules/
+
+# Build artifacts
+build/
+.docusaurus/
+
+# Configuration
+.env
+*.local
+
+# Logs
+*.log
+
+# Editor/IDE files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Test coverage
+coverage/
+
+# Misc
+*.tmp
+*.swp
