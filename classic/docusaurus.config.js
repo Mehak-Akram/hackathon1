@@ -12,7 +12,7 @@ import {themes as prismThemes} from 'prism-react-renderer';
 const config = {
   title: 'Physical AI & Humanoid Robotics Textbook',
   tagline: 'A Comprehensive Guide to Physical AI and Humanoid Robotics',
-  favicon: 'img/favicon.ico',
+  favicon: 'img/docusaurus.png',
 
   // Future flags, see https://docusaurus.io/docs/api/docusaurus-config#future
   future: {

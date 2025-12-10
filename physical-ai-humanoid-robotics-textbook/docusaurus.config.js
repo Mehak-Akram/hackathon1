@@ -12,7 +12,7 @@ import {themes as prismThemes} from 'prism-react-renderer';
 const config = {
   title: 'Physical AI & Humanoid Robotics Textbook',
   tagline: 'A hands-on, end-to-end learning path designed to future-proof your skills—covering humanoid robotics, ROS 2, large action models, simulation environments, vision-language-action (VLA) systems, real hardware integration, and advanced AI for building truly intelligent next-generation machines.',
-  favicon: 'img/favicon.ico',
+  favicon: 'img/docusaurus.png',
 
   // Future flags, see https://docusaurus.io/docs/api/docusaurus-config#future
   future: {
@@ -96,7 +96,7 @@ const config = {
             label: 'Textbook',
           },
           {
-            href: 'https://github.com/PhysicalAIRobotics/physical-ai-humanoid-robotics-textbook/tree/main/docs/',
+            href: 'https://github.com/Mehak-Akram',
             label: 'GitHub',
             position: 'right',
           },
@@ -136,7 +136,7 @@ const config = {
             items: [
               {
                 label: 'GitHub',
-                href: 'https://github.com/PhysicalAIRobotics/physical-ai-humanoid-robotics-textbook',
+                href: 'https://github.com/Mehak-Akram',
               },
             ],
           },
