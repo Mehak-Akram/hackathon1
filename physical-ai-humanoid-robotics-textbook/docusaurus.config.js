@@ -96,6 +96,11 @@ const config = {
             label: 'Textbook',
           },
           {
+            type: 'html',
+            position: 'right',
+            value: '<a id="chatbot-toggle" href="#" class="navbar__link" style="cursor: pointer;" onclick="document.dispatchEvent(new CustomEvent(\'openChatbot\', { detail: {} })); return false;">💬 AI Assistant</a>',
+          },
+          {
             href: 'https://github.com/Mehak-Akram',
             label: 'GitHub',
             position: 'right',

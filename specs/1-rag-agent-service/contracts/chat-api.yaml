@@ -1,0 +1,215 @@
+openapi: 3.0.3
+info:
+  title: RAG Agent Chat API
+  description: API for interacting with the Physical AI Textbook RAG Agent
+  version: 1.0.0
+servers:
+  - url: https://api.example.com/v1
+    description: Production server
+  - url: https://staging-api.example.com/v1
+    description: Staging server
+
+paths:
+  /chat:
+    post:
+      summary: Submit a question to the RAG agent
+      description: Sends a user question to the agent and receives a textbook-grounded response
+      operationId: submitQuestion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatRequest'
+      responses:
+        '200':
+          description: Successful response from the agent
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatResponse'
+        '400':
+          description: Invalid request parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+      security:
+        - bearerAuth: []
+
+  /chat/session:
+    post:
+      summary: Create a new conversation session
+      description: Initializes a new conversation session for multi-turn interactions
+      operationId: createSession
+      responses:
+        '201':
+          description: Session created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Bearer token for authentication
+
+  schemas:
+    ChatRequest:
+      type: object
+      required:
+        - question
+      properties:
+        question:
+          type: string
+          description: The user's question about Physical AI concepts
+          example: "What are the fundamental principles of physical AI?"
+          minLength: 1
+          maxLength: 1000
+        session_id:
+          type: string
+          description: Existing session identifier (creates new if not provided)
+          pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        user_preferences:
+          type: object
+          description: User preferences for response style and detail level
+          properties:
+            detail_level:
+              type: string
+              enum: [basic, intermediate, advanced]
+              description: Desired level of technical detail
+              example: "intermediate"
+            response_format:
+              type: string
+              enum: [concise, detailed, examples]
+              description: Preferred response format
+              example: "detailed"
+
+    ChatResponse:
+      type: object
+      required:
+        - response
+        - session_id
+        - citations
+        - retrieved_context_count
+        - response_time
+      properties:
+        response:
+          type: string
+          description: The agent's response to the question
+          example: "Physical AI combines robotics, machine learning, and physics to create intelligent systems that interact with the physical world..."
+          minLength: 1
+          maxLength: 10000
+        session_id:
+          type: string
+          description: The session identifier
+          pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        citations:
+          type: array
+          description: List of source citations used in the response
+          items:
+            $ref: '#/components/schemas/Citation'
+        retrieved_context_count:
+          type: integer
+          description: Number of context chunks used to generate the response
+          minimum: 0
+          example: 3
+        response_time:
+          type: number
+          description: Time taken to generate the response in seconds
+          minimum: 0
+          example: 4.25
+        followup_suggestions:
+          type: array
+          description: Suggested follow-up questions
+          items:
+            type: string
+          example: ["How does this apply to humanoid robots?", "What are the practical implementations?"]
+
+    Citation:
+      type: object
+      required:
+        - source_url
+        - chapter
+        - section
+      properties:
+        source_url:
+          type: string
+          format: uri
+          description: URL of the source content
+          example: "https://textbook.example.com/chapter3/section2"
+        chapter:
+          type: string
+          description: Chapter name/identifier
+          example: "Chapter 3: Physical AI Fundamentals"
+        section:
+          type: string
+          description: Section name within chapter
+          example: "3.2 Principles of Physical Interaction"
+        heading:
+          type: string
+          description: Specific heading within the section
+          example: "Force Control in Physical Systems"
+        page_reference:
+          type: string
+          description: Page number or location reference
+          example: "p. 145"
+        similarity_score:
+          type: number
+          description: How relevant this source was to the response (0.0 to 1.0)
+          minimum: 0.0
+          maximum: 1.0
+          example: 0.87
+
+    SessionResponse:
+      type: object
+      required:
+        - session_id
+        - created_at
+      properties:
+        session_id:
+          type: string
+          description: The new session identifier
+          pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        created_at:
+          type: string
+          format: date-time
+          description: When the session was created
+          example: "2023-01-01T12:00:00Z"
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+        - message
+      properties:
+        error:
+          type: string
+          description: Error code
+          example: "RETRIEVAL_ERROR"
+        message:
+          type: string
+          description: Human-readable error message
+          example: "Unable to retrieve relevant content from the textbook"
+        details:
+          type: object
+          description: Additional error details
+          example: {"retrieval_attempted": true}

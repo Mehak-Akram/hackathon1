@@ -1,0 +1,4 @@
+2025-12-18 21:48:59,066 - main - WARNING - Could not import chat routes: No module named 'backend'
+2025-12-18 21:48:59,067 - main - INFO - Starting RAG Agent Service for Physical AI Textbook
+2025-12-18 21:50:16,493 - main - WARNING - Could not import chat routes: No module named 'rag_agent'
+2025-12-18 21:50:16,494 - main - INFO - Starting RAG Agent Service for Physical AI Textbook
