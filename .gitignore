@@ -22,3 +22,8 @@ htmlcov/
 # IDEs
 .vscode/
 .idea/
+
+.env
+.env.example
+
+nul

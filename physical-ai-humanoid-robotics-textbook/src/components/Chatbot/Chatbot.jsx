@@ -12,7 +12,7 @@ import './Chatbot.css';
  * Connects to FastAPI backend, passes page context and selected text, renders responses inline
  */
 const Chatbot = ({
-  backendUrl = 'http://localhost:8000/api/v1',
+  backendUrl = 'https://mehak-akram-physical-i-book.hf.space/api/v1',
   initialSessionId,
   pageContext,
   userPreferences: initialUserPreferences,

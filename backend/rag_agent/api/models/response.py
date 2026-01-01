@@ -174,10 +174,6 @@ class AgentResponse(BaseModel):
         max_length=10000,
         description="The actual response text from the agent"
     )
-    session_id: str = Field(
-        ...,
-        description="Reference to the conversation session"
-    )
     question_id: str = Field(
         ...,
         description="Reference to the original question"
@@ -209,7 +205,7 @@ class AgentResponse(BaseModel):
             raise ValueError('Content must be 1-10000 characters')
         return v.strip()
 
-    @field_validator('session_id', 'question_id')
+    @field_validator('question_id')
     @classmethod
     def validate_ids(cls, v: str) -> str:
         if not cls._is_valid_uuid(v):
@@ -219,7 +215,6 @@ class AgentResponse(BaseModel):
     @staticmethod
     def _is_valid_uuid(uuid_string: str) -> bool:
         try:
-            import uuid
             import uuid
             uuid.UUID(uuid_string)
             return True
@@ -241,7 +236,7 @@ class AgentResponse(BaseModel):
         return v
 
     @staticmethod
-    def _is_valid_uuid(uuid_string: str) -> bool:
+    def _is_valid_uuid(uuid_string: str) -> str:
         try:
             import uuid
             uuid.UUID(uuid_string)
@@ -259,10 +254,6 @@ class ChatResponse(BaseModel):
         min_length=1,
         max_length=10000,
         description="The agent's response to the question"
-    )
-    session_id: str = Field(
-        ...,
-        description="The session identifier"
     )
     citations: List[Citation] = Field(
         ...,
@@ -292,13 +283,6 @@ class ChatResponse(BaseModel):
             raise ValueError('Response must be 1-10000 characters')
         return v.strip()
 
-    @field_validator('session_id')
-    @classmethod
-    def validate_session_id(cls, v: str) -> str:
-        if not cls._is_valid_uuid(v):
-            raise ValueError('Session ID must be a valid UUID')
-        return v
-
     @field_validator('citations')
     @classmethod
     def validate_citations(cls, v: List[Citation]) -> List[Citation]:
@@ -312,45 +296,6 @@ class ChatResponse(BaseModel):
         if v <= 0:
             raise ValueError('Response time must be positive')
         return v
-
-    @staticmethod
-    def _is_valid_uuid(uuid_string: str) -> bool:
-        try:
-            import uuid
-            uuid.UUID(uuid_string)
-            return True
-        except ValueError:
-            return False
-
-
-class SessionResponse(BaseModel):
-    """
-    Model for API response to session creation
-    """
-    session_id: str = Field(
-        ...,
-        description="The new session identifier"
-    )
-    created_at: str = Field(
-        ...,
-        description="When the session was created"
-    )
-
-    @field_validator('session_id')
-    @classmethod
-    def validate_session_id(cls, v: str) -> str:
-        if not cls._is_valid_uuid(v):
-            raise ValueError('Session ID must be a valid UUID')
-        return v
-
-    @staticmethod
-    def _is_valid_uuid(uuid_string: str) -> bool:
-        try:
-            import uuid
-            uuid.UUID(uuid_string)
-            return True
-        except ValueError:
-            return False
 
 
 class ErrorResponse(BaseModel):
@@ -368,4 +313,98 @@ class ErrorResponse(BaseModel):
     details: Optional[Dict[str, Any]] = Field(
         default=None,
         description="Additional error details"
+    )
+
+
+class UserResponse(BaseModel):
+    """
+    Model for user response
+    """
+    id: str = Field(
+        ...,
+        description="Unique identifier for the user"
+    )
+    email: str = Field(
+        ...,
+        description="User's email address"
+    )
+    username: Optional[str] = Field(
+        default=None,
+        description="User's username"
+    )
+    full_name: Optional[str] = Field(
+        default=None,
+        description="User's full name"
+    )
+    is_active: bool = Field(
+        default=True,
+        description="Whether the user account is active"
+    )
+    created_at: datetime = Field(
+        ...,
+        description="When the user was created"
+    )
+
+
+class ChatSessionResponse(BaseModel):
+    """
+    Model for chat session response
+    """
+    id: str = Field(
+        ...,
+        description="Unique identifier for the chat session"
+    )
+    user_id: str = Field(
+        ...,
+        description="ID of the user who owns this session"
+    )
+    title: Optional[str] = Field(
+        default=None,
+        description="Title of the chat session (auto-generated from first message)"
+    )
+    is_active: bool = Field(
+        default=True,
+        description="Whether the session is active"
+    )
+    created_at: datetime = Field(
+        ...,
+        description="When the session was created"
+    )
+    updated_at: datetime = Field(
+        ...,
+        description="When the session was last updated"
+    )
+
+
+class ChatMessageResponse(BaseModel):
+    """
+    Model for chat message response
+    """
+    id: str = Field(
+        ...,
+        description="Unique identifier for the message"
+    )
+    session_id: str = Field(
+        ...,
+        description="ID of the chat session this message belongs to"
+    )
+    role: str = Field(
+        ...,
+        description="Role of the message sender (user, assistant, system)"
+    )
+    content: str = Field(
+        ...,
+        description="Content of the message"
+    )
+    message_order: int = Field(
+        ...,
+        description="Order of the message in the session"
+    )
+    timestamp: datetime = Field(
+        ...,
+        description="When the message was created"
+    )
+    metadata: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Additional metadata for the message"
     )

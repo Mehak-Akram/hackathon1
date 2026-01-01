@@ -7,7 +7,7 @@ The RAG Agent Service provides a question answering capability that allows users
 
 ### 1. Query Processing
 - User submits a natural language question via the `/api/v1/chat` endpoint
-- The system validates the input and creates/uses a session ID for context tracking
+- The system validates the input and processes the request independently
 
 ### 2. Context Retrieval
 - The retrieval tool connects to the Qdrant vector database
@@ -16,7 +16,7 @@ The RAG Agent Service provides a question answering capability that allows users
 
 ### 3. Answer Generation
 - The textbook agent formats the retrieved context for the LLM
-- Uses OpenAI's API to generate a response based only on the provided context
+- Uses OpenRouter API to generate a response based only on the provided context
 - Applies user preferences for detail level and response format
 
 ### 4. Response Validation
@@ -35,7 +35,6 @@ POST /api/v1/chat
 ```json
 {
   "question": "What are the fundamental principles of physical AI?",
-  "session_id": "optional-session-id",
   "user_preferences": {
     "detail_level": "intermediate",
     "response_format": "detailed"
@@ -47,7 +46,6 @@ POST /api/v1/chat
 ```json
 {
   "response": "Physical AI combines robotics, machine learning, and physics...",
-  "session_id": "session-id",
   "citations": [
     {
       "source_url": "https://textbook.example.com/chapter3/section2",
@@ -73,27 +71,15 @@ POST /api/v1/chat
 - `detailed`: Thorough explanations
 - `examples`: Includes relevant examples
 
-## Session Management
+## Stateless Architecture
 
-### Create Session
-```
-POST /api/v1/session
-```
-
-### Session Endpoint
-```
-GET /api/v1/session/{session_id}
-DELETE /api/v1/session/{session_id}
-```
-
-Sessions automatically timeout after 30 minutes of inactivity (configurable).
+No session management is required. Each request is processed independently without maintaining conversation history or state between requests.
 
 ## Configuration
 
 The system behavior can be configured via environment variables in `.env`:
 - `DEFAULT_TOP_K`: Number of context chunks to retrieve (default: 5)
-- `SESSION_TIMEOUT_MINUTES`: Session timeout duration (default: 30)
-- `AGENT_MODEL`: OpenAI model to use (default: gpt-4-turbo-preview)
+- `AGENT_MODEL`: OpenRouter model to use (default: openai/gpt-4o)
 - `TEMPERATURE`: Response randomness (default: 0.1 for factual responses)
 
 ## Validation and Quality Assurance
@@ -106,12 +92,10 @@ The system behavior can be configured via environment variables in `.env`:
 ## Error Handling
 
 Common error responses:
-- `400`: Invalid request (malformed question, invalid session ID)
-- `404`: Session not found
+- `400`: Invalid request (malformed question)
 - `500`: Internal server error or API service unavailable
 
 ## Performance
 
 - Target response time: <10 seconds for 95% of requests
-- Supports 100+ concurrent sessions
-- Configurable timeout settings
+- Stateless architecture allows for efficient scaling

@@ -1,4 +1,6 @@
 import os
+import re
+import uuid
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
@@ -106,7 +108,6 @@ def extract_text_from_url(url: str) -> str:
                 text_content = soup.get_text(separator=' ', strip=True)
 
         # Clean up excessive whitespace
-        import re
         text_content = re.sub(r'\s+', ' ', text_content).strip()
 
         logger.info(f"Extracted {len(text_content)} characters from {url}")
@@ -155,111 +156,52 @@ def extract_meaningful_text(element):
 
 def chunk_text(text: str, url: str = "") -> List[Dict]:
     """
-    Chunk text using RAG-optimized strategy with semantic boundaries and overlap
+    Chunk text using advanced semantic chunking strategy for better RAG performance
     """
-    
-    logger.info(f"Chunking text of {len(text)} characters")
-
-    # Split text by semantic boundaries (headings, sections)
-    lines = text.split('\n')
-
-    chunks = []
-    current_chunk = ""
-    current_metadata = {
-        "url": url,
-        "chapter": "",
-        "section": "",
-        "heading_hierarchy": []
-    }
+    logger.info(f"Chunking text of {len(text)} characters using semantic chunking")
 
     # Extract basic metadata from URL
     parsed_url = urlparse(url)
     path_parts = [part for part in parsed_url.path.split('/') if part]
     if len(path_parts) >= 1:
-        current_metadata["chapter"] = path_parts[-1] if path_parts[-1] else (path_parts[-2] if len(path_parts) > 1 else "home")
+        chapter = path_parts[-1] if path_parts[-1] else (path_parts[-2] if len(path_parts) > 1 else "home")
+    else:
+        chapter = "home"
 
-    # Process lines into semantic chunks
-    i = 0
-    while i < len(lines):
-        line = lines[i].strip()
+    # Import the semantic chunker
+    from rag_agent.utils.semantic_chunker import semantic_chunker
 
-        if not line:
-            i += 1
-            continue
+    # Create metadata for the text using proper schema
+    from rag_agent.utils.metadata_schema import ChunkMetadata
 
-        # Check if this line is a heading
-        if line.startswith('#'):
-            # If we have content in current chunk, save it first
-            if current_chunk.strip():
-                chunks.append({
-                    "content": current_chunk.strip(),
-                    "metadata": current_metadata.copy()
-                })
+    base_metadata = ChunkMetadata(
+        url=url,
+        chapter=chapter,
+        section="",
+        heading_hierarchy=[],
+        source_type="web"
+    )
 
-            # Process heading and update metadata
-            level = line.count('#')
-            heading_text = line.lstrip('#').strip()
+    # Use the semantic chunker to create properly structured chunks
+    chunks = semantic_chunker.create_chunks(text, url=url, metadata=base_metadata)
 
-            if level == 1:
-                current_metadata["chapter"] = heading_text
-                current_metadata["heading_hierarchy"] = [heading_text]
-            elif level == 2:
-                current_metadata["section"] = heading_text
-                if len(current_metadata["heading_hierarchy"]) > 0:
-                    current_metadata["heading_hierarchy"] = [current_metadata["heading_hierarchy"][0], heading_text]
-                else:
-                    current_metadata["heading_hierarchy"] = [heading_text]
-            elif level == 3:
-                if len(current_metadata["heading_hierarchy"]) > 1:
-                    current_metadata["heading_hierarchy"] = [current_metadata["heading_hierarchy"][0], current_metadata["heading_hierarchy"][1], heading_text]
-                else:
-                    current_metadata["heading_hierarchy"] = [heading_text, heading_text]
+    # Convert to the format expected by the rest of the pipeline
+    formatted_chunks = []
+    for i, chunk in enumerate(chunks):
+        # Calculate quality score for the chunk
+        quality_score = semantic_chunker.calculate_chunk_quality(chunk.content)
 
-            # Start new chunk with heading
-            current_chunk = line + "\n"
-            i += 1
-        else:
-            # Add content to current chunk, respecting size limits
-            if len(current_chunk) + len(line) < 800:  # Target chunk size ~800 chars
-                current_chunk += line + "\n"
-                i += 1
-            else:
-                # Current chunk is getting too large, save it and start a new one
-                if current_chunk.strip():
-                    chunks.append({
-                        "content": current_chunk.strip(),
-                        "metadata": current_metadata.copy()
-                    })
+        # Update metadata with quality metrics
+        chunk.metadata.quality_score = quality_score
 
-                # Start new chunk
-                current_chunk = line + "\n"
-                i += 1
+        formatted_chunk = {
+            "content": chunk.content,
+            "metadata": chunk.metadata
+        }
+        formatted_chunks.append(formatted_chunk)
 
-    # Add the final chunk if it has content
-    if current_chunk.strip():
-        chunks.append({
-            "content": current_chunk.strip(),
-            "metadata": current_metadata.copy()
-        })
-
-    # Optional: Add some overlap between chunks for better context retrieval
-    # This helps with retrieval when queries span chunk boundaries
-    if len(chunks) > 1:
-        overlap_chunks = []
-        for i, chunk in enumerate(chunks):
-            if i > 0:  # Add overlap to all except first
-                # Add last 2 lines from previous chunk to current chunk
-                prev_content = chunks[i-1]["content"]
-                prev_lines = prev_content.split('\n')[-2:]  # Get last 2 lines
-                if prev_lines:
-                    overlap_text = " ".join(prev_lines) + " [CONTINUED] " + chunk["content"]
-                    chunk["content"] = overlap_text
-
-            overlap_chunks.append(chunk)
-        chunks = overlap_chunks
-
-    logger.info(f"Created {len(chunks)} chunks from text")
-    return chunks
+    logger.info(f"Created {len(formatted_chunks)} semantic chunks from text")
+    return formatted_chunks
 
 def embed(text_chunks: List[Dict]) -> List[Tuple[str, List[float]]]:
     """
@@ -373,7 +315,6 @@ def save_chunk_to_qdrant(content: str, embedding: List[float], metadata: Dict, c
 
     try:
         # Generate a unique ID for this record
-        import uuid
         record_id = str(uuid.uuid4())
 
         # Prepare the point to insert
@@ -548,5 +489,14 @@ def main():
         logger.error(f"Pipeline failed: {str(e)}", exc_info=True)
         raise
 
+# For running the ingestion pipeline separately, use: python -c "from main import main; main()"
 if __name__ == "__main__":
-    main()
+    import uvicorn
+    # Only start the web server when run directly, not the ingestion pipeline
+    from rag_agent.main import app
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=8000,
+        reload=False  # Set reload to False for production
+    )

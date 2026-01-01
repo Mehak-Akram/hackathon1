@@ -38,7 +38,6 @@ class ResponseValidationService:
             },
             "overall_validation": {
                 "response_has_content": bool(response.response.strip()),
-                "session_id_valid": bool(response.session_id),
                 "response_time_positive": response.response_time > 0,
                 "context_count_match": True if retrieved_contexts is None else response.retrieved_context_count == len(retrieved_contexts)
             }
@@ -79,7 +78,6 @@ class ResponseValidationService:
         # Overall validation checks
         overall_valid = all([
             validation_result["overall_validation"]["response_has_content"],
-            validation_result["overall_validation"]["session_id_valid"],
             validation_result["overall_validation"]["response_time_positive"],
             validation_result["citation_validation"]["has_citations"],
             validation_result["citation_validation"]["all_citations_complete"]
@@ -176,7 +174,6 @@ class ResponseValidationService:
                 "has_content": bool(response.response and response.response.strip()),
                 "has_citations": len(response.citations) > 0,
                 "has_positive_response_time": response.response_time > 0,
-                "has_session_id": bool(response.session_id),
                 "citations_reference_content": self._citations_reference_content(response),
                 "response_not_generic": not self._is_generic_response(response.response)
             },

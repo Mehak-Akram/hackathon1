@@ -9,13 +9,12 @@ This document provides comprehensive information about using the RAG Agent Servi
 The RAG Agent Service consists of several key components:
 - **Textbook Agent**: Core AI agent that processes questions and generates responses
 - **Retrieval Tool**: Connects to Qdrant vector database to retrieve relevant textbook content
-- **Conversation Service**: Manages session state and conversation history
 - **Validation Service**: Ensures responses are grounded in retrieved content and properly cited
 - **Agent Service**: Orchestrates all components and handles request processing
 
 ### Data Flow
 1. User submits a question via the API
-2. The Agent Service processes the request, maintaining conversation context
+2. The Agent Service processes the request independently
 3. The Retrieval Tool queries Qdrant for relevant textbook content
 4. The Textbook Agent generates a response based on retrieved context
 5. The Validation Service ensures response grounding and citation accuracy
@@ -39,7 +38,6 @@ POST /chat
 ```json
 {
   "question": "What are the fundamental principles of physical AI?",
-  "session_id": "optional-session-id",
   "user_preferences": {
     "detail_level": "intermediate",
     "response_format": "detailed"
@@ -51,7 +49,6 @@ POST /chat
 ```json
 {
   "response": "Physical AI combines robotics, machine learning, and physics...",
-  "session_id": "session-id",
   "citations": [
     {
       "id": "unique-id",
@@ -68,12 +65,11 @@ POST /chat
 }
 ```
 
-#### Session Management
-```
-POST /session
-GET /session/{session_id}
-DELETE /session/{session_id}
-```
+## Stateless Architecture
+- No session management endpoints
+- Each request is processed independently
+- No conversation history maintained between requests
+- No session IDs required or returned
 
 ### User Preferences
 
@@ -92,7 +88,7 @@ DELETE /session/{session_id}
 ### Environment Variables
 ```env
 # API Configuration
-OPENAI_API_KEY=your_openai_api_key
+OPENROUTER_API_KEY=your_openrouter_api_key
 QDRANT_URL=your_qdrant_url
 QDRANT_API_KEY=your_qdrant_api_key
 QDRANT_COLLECTION_NAME=your_collection_name
@@ -100,7 +96,6 @@ QDRANT_COLLECTION_NAME=your_collection_name
 # Application Configuration
 LOG_LEVEL=INFO
 DEFAULT_TOP_K=5
-SESSION_TIMEOUT_MINUTES=30
 
 # Server Configuration
 HOST=0.0.0.0
@@ -109,8 +104,7 @@ PORT=8000
 
 ### Performance Tuning
 - `DEFAULT_TOP_K`: Number of context chunks to retrieve (default: 5)
-- `SESSION_TIMEOUT_MINUTES`: Session timeout duration (default: 30)
-- `AGENT_MODEL`: OpenAI model to use (default: gpt-4-turbo-preview)
+- `AGENT_MODEL`: OpenRouter model to use (default: openai/gpt-4o)
 - `TEMPERATURE`: Response randomness (default: 0.1 for factual responses)
 
 ## Validation Procedures
@@ -131,7 +125,6 @@ The system validates responses through multiple checks:
 #### Performance Validation
 - Monitors response time (target: <10 seconds for 95% of requests)
 - Tracks system availability (target: 99% uptime)
-- Measures concurrent session handling (target: 100+ sessions)
 
 ### Testing Procedures
 
@@ -168,8 +161,8 @@ The service provides health and metrics endpoints:
 
 ### Fallback Mechanisms
 - Automatic retry with exponential backoff
-- Simplified processing when conversation context unavailable
 - Graceful degradation when external services are slow
+- Fallback to general knowledge when no relevant context found
 
 ## Monitoring and Logging
 
@@ -183,7 +176,6 @@ The service provides health and metrics endpoints:
 - Response time percentiles (50th, 95th, 99th)
 - Request success rate
 - Citation accuracy rate
-- Session persistence success rate
 
 ## Security Considerations
 
@@ -194,14 +186,14 @@ The service provides health and metrics endpoints:
 
 ### Data Privacy
 - No personal data storage by default
-- Session data retention limited to timeout period
+- No session data retention
 - Encrypted transmission for all API communications
 
 ## Deployment
 
 ### Requirements
 - Python 3.11+
-- OpenAI API access
+- OpenRouter API access
 - Qdrant vector database access
 - 2GB+ RAM for optimal performance
 
@@ -213,15 +205,14 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --workers 4
 
 ### Scaling
 - Horizontal scaling with load balancer
-- Session affinity for conversation continuity
+- Stateless architecture allows for easy scaling
 - Database connection pooling for external services
 
 ## Troubleshooting
 
 ### Common Issues
-1. **Slow Response Times**: Check Qdrant connectivity and OpenAI API status
+1. **Slow Response Times**: Check Qdrant connectivity and OpenRouter API status
 2. **No Citations**: Verify Qdrant collection has content and proper indexing
-3. **Session Loss**: Check session timeout configuration and client implementation
 
 ### Diagnostic Commands
 ```bash
@@ -243,20 +234,18 @@ curl -X POST http://localhost:8000/api/v1/chat \
 
 ### Resource Management
 - Connection pooling for external services
-- Memory management for conversation history
-- Cleanup of expired sessions
+- Memory management for efficient processing
 
 ## Best Practices
 
 ### For Developers
-- Always handle session IDs for conversation continuity
 - Implement proper error handling and fallbacks
 - Monitor response times and citation accuracy
 - Test with diverse question types
+- Ensure proper API key management
 
 ### For Users
 - Formulate specific questions for better retrieval
-- Use session IDs to maintain context across requests
 - Provide feedback on response quality when possible
 - Respect rate limits and usage guidelines
 

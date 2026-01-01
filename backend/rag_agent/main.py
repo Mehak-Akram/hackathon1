@@ -30,8 +30,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     Application lifespan manager for startup and shutdown events
     """
     logger.info("Starting RAG Agent Service for Physical AI Textbook")
+
     yield
-    logger.info("Shutting down RAG Agent Service for Physical AI Textbook")
+
+    logger.info("Shutting down RAG Agent Service")
 
 # Create FastAPI app
 app = FastAPI(
@@ -65,20 +67,12 @@ async def root():
     return {
         "message": "RAG Agent Service for Physical AI Textbook",
         "version": "1.0.0",
-        "endpoints": ["/health", "/api/v1/chat", "/api/v1/chat/session"]
+        "endpoints": ["/health", "/api/v1/chat"]
     }
 
 # Include API routes
 try:
-    import sys
-    import os
-    # Add the backend directory to the Python path to resolve imports properly
-    backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    if backend_dir not in sys.path:
-        sys.path.insert(0, backend_dir)
-
-    # Import using absolute path
-    from rag_agent.api.routes import chat
+    from .api.routes import chat
     chat_router = chat.router
     app.include_router(chat_router, prefix="/api/v1", tags=["chat"])
     logger.info("Chat routes loaded successfully")
@@ -86,6 +80,19 @@ except ImportError as e:
     logger.error(f"Could not import chat routes: {e}")
     logger.error("Chat routes will not be available. Please check your Python path configuration.")
     raise
+
+
+
+# Include health routes
+try:
+    from .api.routes import health
+    health_router = health.router
+    app.include_router(health_router, prefix="/api/v1", tags=["health"])
+    logger.info("Health routes loaded successfully")
+except ImportError as e:
+    logger.error(f"Could not import health routes: {e}")
+    logger.error("Health routes will not be available.")
+    # This is not critical for the main functionality, so we don't raise
 
 if __name__ == "__main__":
     import uvicorn

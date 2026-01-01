@@ -15,16 +15,15 @@ Initializes the TextbookAgent with necessary services.
 - Instance of TextbookAgent
 
 **Side Effects:**
-- Creates an OpenAI client instance
+- Creates an OpenRouter client instance
 - Sets up retrieval tool reference
-- Sets up conversation service reference
+- Sets up query classification service
 
-#### Method: `answer_question(self, question: str, session_id: Optional[str] = None, user_preferences: Optional[Dict[str, Any]] = None) -> ChatResponse`
+#### Method: `answer_question(self, question: str, user_preferences: Optional[Dict[str, Any]] = None) -> ChatResponse`
 Processes a user question and returns a response based on textbook content.
 
 **Parameters:**
 - `question` (str): The user's question about Physical AI concepts
-- `session_id` (Optional[str]): Session identifier for conversation context
 - `user_preferences` (Optional[Dict[str, Any]]): User preferences for response style
 
 **Returns:**
@@ -34,7 +33,6 @@ Processes a user question and returns a response based on textbook content.
 - Various exceptions if processing fails
 
 **Side Effects:**
-- Updates conversation history if session_id is provided
 - Logs processing metrics
 
 #### Method: `_generate_answer_with_context(self, question: str, retrieved_contexts: List, user_preferences: Optional[Dict[str, Any]] = None, conversation_context: Optional[List[Dict[str, str]]] = None) -> str`
@@ -44,7 +42,7 @@ Generates an answer using retrieved context and conversation history.
 - `question` (str): The original question
 - `retrieved_contexts` (List): Contexts retrieved from the textbook
 - `user_preferences` (Optional[Dict[str, Any]]): User preferences for response style
-- `conversation_context` (Optional[List[Dict[str, str]]]): Previous conversation turns
+- `conversation_context` (Optional[List[Dict[str, str]]]): Previous conversation turns (not used in stateless architecture)
 
 **Returns:**
 - `str`: The generated answer
@@ -64,7 +62,7 @@ Builds the prompt for the LLM based on user preferences and context.
 **Parameters:**
 - `question` (str): The user's question
 - `context` (str): Retrieved context content
-- `conversation_history` (str): Previous conversation turns
+- `conversation_history` (str): Previous conversation turns (not used in stateless architecture)
 - `detail_level` (str): Desired detail level
 - `response_format` (str): Desired response format
 
@@ -91,90 +89,19 @@ Validates that the answer is grounded in the retrieved context.
 **Returns:**
 - `bool`: Whether the answer is properly grounded
 
-## Module: services/conversation.py
+## Module: agents/retrieval_tool.py
 
-### Class: ConversationService
-Manages conversation sessions and history.
+### Class: QdrantRetrievalTool
+Connects to Qdrant to retrieve textbook content.
 
 #### Method: `__init__(self)`
-Initializes the ConversationService.
+Initializes the retrieval tool with Qdrant client.
 
 **Parameters:**
 - None
 
 **Returns:**
-- Instance of ConversationService
-
-#### Method: `create_session(self, user_id: Optional[str] = None, metadata: Optional[Dict] = None) -> ConversationSession`
-Creates a new conversation session.
-
-**Parameters:**
-- `user_id` (Optional[str]): User identifier
-- `metadata` (Optional[Dict]): Additional session metadata
-
-**Returns:**
-- `ConversationSession`: The created session
-
-#### Method: `get_session(self, session_id: str) -> Optional[ConversationSession]`
-Retrieves an existing session.
-
-**Parameters:**
-- `session_id` (str): Session identifier
-
-**Returns:**
-- `Optional[ConversationSession]`: The session if found, None otherwise
-
-#### Method: `update_session(self, session_id: str, new_data: Dict[str, Any]) -> bool`
-Updates an existing session.
-
-**Parameters:**
-- `session_id` (str): Session identifier
-- `new_data` (Dict[str, Any]): Data to update
-
-**Returns:**
-- `bool`: Whether update was successful
-
-#### Method: `add_conversation_turn(self, session_id: str, question: str, response: str) -> bool`
-Adds a question-response pair to the conversation history.
-
-**Parameters:**
-- `session_id` (str): Session identifier
-- `question` (str): The question asked
-- `response` (str): The response given
-
-**Returns:**
-- `bool`: Whether addition was successful
-
-#### Method: `get_conversation_context(self, session_id: str, max_turns: int = 5) -> List[Dict[str, str]]`
-Gets recent conversation context for follow-up questions.
-
-**Parameters:**
-- `session_id` (str): Session identifier
-- `max_turns` (int): Maximum number of turns to retrieve
-
-**Returns:**
-- `List[Dict[str, str]]`: Recent conversation turns
-
-#### Method: `end_session(self, session_id: str) -> bool`
-Ends and removes a conversation session.
-
-**Parameters:**
-- `session_id` (str): Session identifier
-
-**Returns:**
-- `bool`: Whether ending was successful
-
-#### Method: `cleanup_expired_sessions(self)`
-Removes sessions that have exceeded the timeout.
-
-**Parameters:**
-- None
-
-**Returns:**
-- None
-
-**Side Effects:**
-- Removes expired sessions from memory
+- Instance of QdrantRetrievalTool
 
 ## Module: services/validation.py
 
@@ -263,66 +190,6 @@ Validates retrieval quality for the given query.
 **Returns:**
 - `Dict[str, Any]`: Validation results
 
-## Module: services/agent_service.py
-
-### Class: AgentService
-Main service that orchestrates all components of the RAG Agent.
-
-#### Method: `__init__(self)`
-Initializes the agent service with all required components.
-
-**Parameters:**
-- None
-
-**Returns:**
-- Instance of AgentService
-
-#### Method: `process_request(self, chat_request: ChatRequest) -> ChatResponse`
-Process a chat request through all service components with error handling and fallbacks.
-
-**Parameters:**
-- `chat_request` (ChatRequest): The incoming chat request
-
-**Returns:**
-- `ChatResponse`: The processed response
-
-#### Method: `process_request_with_circuit_breaker(self, chat_request: ChatRequest, max_retries: int = 2) -> ChatResponse`
-Process a request with circuit breaker pattern and retry logic.
-
-**Parameters:**
-- `chat_request` (ChatRequest): The incoming chat request
-- `max_retries` (int): Maximum number of retry attempts
-
-**Returns:**
-- `ChatResponse`: The processed response
-
-#### Method: `process_request_with_detailed_logging(self, chat_request: ChatRequest) -> Dict[str, Any]`
-Process a request with detailed performance and logging information.
-
-**Parameters:**
-- `chat_request` (ChatRequest): The incoming chat request
-
-**Returns:**
-- `Dict[str, Any]`: Processing log with detailed information
-
-#### Method: `validate_service_health(self) -> Dict[str, Any]`
-Validate the health of all service components.
-
-**Parameters:**
-- None
-
-**Returns:**
-- `Dict[str, Any]`: Health status of all components
-
-#### Method: `get_service_metrics(self) -> Dict[str, Any]`
-Get metrics about service usage and performance.
-
-**Parameters:**
-- None
-
-**Returns:**
-- `Dict[str, Any]`: Service metrics
-
 ## Module: api/routes/chat.py
 
 ### Router: `router`
@@ -336,30 +203,6 @@ Submit a question to the RAG agent.
 
 **Response:**
 - `ChatResponse`: Answer with citations
-
-#### Endpoint: `POST /session`
-Create a new conversation session.
-
-**Response:**
-- `SessionResponse`: New session information
-
-#### Endpoint: `GET /session/{session_id}`
-Get session information.
-
-**Parameters:**
-- `session_id` (str): Session identifier
-
-**Response:**
-- `Dict[str, Any]`: Session information
-
-#### Endpoint: `DELETE /session/{session_id}`
-End a conversation session.
-
-**Parameters:**
-- `session_id` (str): Session identifier
-
-**Response:**
-- `Dict[str, str]`: Confirmation message
 
 ## Module: utils/helpers.py
 
@@ -436,14 +279,13 @@ Get a logger instance with the specified name.
 Application settings loaded from environment variables.
 
 **Attributes:**
-- `openai_api_key` (str): OpenAI API key
+- `openrouter_api_key` (str): OpenRouter API key
 - `qdrant_url` (str): Qdrant service URL
 - `qdrant_api_key` (str): Qdrant API key
 - `qdrant_collection_name` (str): Name of the collection to query
 - `log_level` (str): Logging level
 - `default_top_k` (int): Default number of results to retrieve
-- `session_timeout_minutes` (int): Minutes of inactivity before session expires
-- `agent_model` (str): OpenAI model to use
+- `agent_model` (str): OpenRouter model to use (default: openai/gpt-4o)
 - `max_response_tokens` (int): Maximum response tokens
 - `temperature` (float): Response generation temperature
 - `max_concurrent_requests` (int): Maximum concurrent requests

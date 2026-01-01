@@ -11,21 +11,8 @@ from ..config.settings import settings
 from ..api.models.request import ChatRequest
 from ..api.models.response import ChatResponse, Citation, AgentResponse, RetrievedContext
 from ..utils.helpers import time_it_async, format_timestamp, log_error_with_context, safe_execute
-from ..utils.error_handler import handle_exceptions, debug_context, error_handler
-from ..utils.debug_utils import debug_trace, debug_performance_monitor, log_data_flow
 from ..utils.logger import get_logger
-from ..utils.error_handler import error_handler
 from .retrieval_tool import retrieval_tool
-from ..utils.connection_pool import get_http_client
-from ..services.conversation import conversation_service
-from ..utils.performance import (
-    cached_agent_response,
-    optimize_concurrent_retrieval,
-    measure_performance,
-    async_timeout,
-    apply_optimized_settings,
-    OPTIMIZED_SETTINGS
-)
 
 logger = get_logger(__name__)
 
@@ -35,78 +22,60 @@ class TextbookAgent:
     AI agent that answers questions about Physical AI concepts using textbook content
     """
     def __init__(self):
-        # Use Google Gemini via OpenAI-compatible endpoint instead of OpenAI
-        # This maintains the same interface while using Gemini's free tier
-        if settings.gemini_api_key:
-            # Use Gemini API with OpenAI-compatible endpoint
+        # Use OpenRouter API as the primary LLM
+        if settings.openrouter_api_key:
+            # Configure OpenAI client to use OpenRouter
             self.client = AsyncOpenAI(
-                api_key=settings.gemini_api_key,
-                base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
+                api_key=settings.openrouter_api_key,
+                base_url="https://openrouter.ai/api/v1"
             )
-            self.model = "gemini-2.0-flash"  # Use free tier model
-        else:
-            # Fallback to OpenAI if no Gemini key provided
+            self.model = settings.agent_model  # Use configured model
+            logger.info(f"Using OpenRouter API with model: {settings.agent_model}")
+        elif settings.openai_api_key:
+            # Fallback to OpenAI if no OpenRouter key provided
             self.client = AsyncOpenAI(api_key=settings.openai_api_key)
             self.model = settings.agent_model  # Use configured model
+            logger.warning(f"Using OpenAI API as fallback with model: {settings.agent_model}")
+        else:
+            # If no key is provided, use a mock client that returns helpful error messages
+            logger.warning("No API keys configured for LLM. Using mock client.")
+            self.client = None
+            self.model = "mock-model"
         self.retrieval_tool = retrieval_tool
-        self.conversation_service = conversation_service
 
-    @measure_performance
-    @cached_agent_response(ttl=300)  # Cache responses for 5 minutes
-    @optimize_concurrent_retrieval
-    @async_timeout(10.0)  # 10 second timeout for the entire operation
-    @debug_trace(include_args=True, include_result=False, log_level="DEBUG")
-    @debug_performance_monitor(time_threshold=2.0, memory_threshold=25.0)
-    @log_data_flow(operation="answer_question")
-    @handle_exceptions(
-        fallback_return=None,
-        log_error=True,
-        reraise=True,
-        include_system_diagnostics=True
-    )
     async def answer_question(
         self,
         question: str,
-        session_id: Optional[str] = None,
         user_preferences: Optional[Dict[str, Any]] = None
     ) -> ChatResponse:
         """
-        Answer a question using retrieved textbook content and conversation context
+        Answer a question using retrieved textbook content
         Optimized for sub-10 second response time with caching and performance monitoring
         """
         start_time = time.time()
-        logger.info(f"Processing question: {question[:50]}... for session {session_id}")
+        logger.info(f"Processing question: {question[:50]}...")
 
         try:
-            # Get conversation context if session is provided
-            conversation_context = []
-            if session_id:
-                try:
-                    conversation_context = await self.conversation_service.get_conversation_context(
-                        session_id, max_turns=5
-                    )
-                    logger.debug(f"Retrieved {len(conversation_context)} conversation turns for session {session_id}")
-                except Exception as e:
-                    error_id = log_error_with_context(e, {
-                        "operation": "get_conversation_context",
-                        "session_id": session_id,
-                        "question": question[:50]
-                    })
-                    logger.warning(f"Failed to retrieve conversation context: {str(e)} - Error ID: {error_id}")
-                    # Continue with empty conversation context
+            # Always use RAG for all questions (simplified approach without query classification)
+            should_use_rag = True
 
-            # Retrieve relevant context from the textbook with optimized parameters
-            retrieved_contexts = await self.retrieval_tool.retrieve_context(
-                query=question,
-                top_k=min(settings.default_top_k, 5)  # Limit to 5 for faster retrieval
-            )
+            retrieved_contexts = []
+            if should_use_rag:
+                # Retrieve relevant context from the textbook with optimized parameters and query expansion
+                retrieved_contexts = await self.retrieval_tool.retrieve_context_with_expansion(
+                    query=question,
+                    top_k=min(settings.default_top_k, 5)  # Limit to 5 for faster retrieval
+                )
+            else:
+                # For greetings or casual chat, don't use RAG
+                logger.info(f"Skipping RAG retrieval for greeting/casual query: {question[:50]}...")
 
-            # Generate the answer using the retrieved context and conversation history
+            # Generate the answer using the retrieved context
             response_content = await self._generate_answer_with_context(
                 question,
                 retrieved_contexts,
                 user_preferences,
-                conversation_context=conversation_context
+                conversation_context=[]  # No conversation context for stateless operation
             )
 
             # Validate that the response is grounded in the retrieved content
@@ -124,76 +93,50 @@ class TextbookAgent:
             # Extract citations from the retrieved contexts
             citations = self._extract_citations(retrieved_contexts)
 
-            # Calculate response time
-            response_time = time.time() - start_time
+            # Calculate response time ensuring it's always positive
+            response_time = max(time.time() - start_time, 0.001)
 
             # Create the chat response
             chat_response = ChatResponse(
                 response=response_content,
-                session_id=session_id or "unknown",
                 citations=citations,
                 retrieved_context_count=len(retrieved_contexts),
                 response_time=response_time
             )
 
-            # Add the conversation turn to the session history if session_id is provided
-            if session_id:
-                try:
-                    await self.conversation_service.add_conversation_turn(
-                        session_id, question, response_content
-                    )
-                    logger.debug(f"Added conversation turn to session {session_id}")
-                except Exception as e:
-                    error_id = log_error_with_context(e, {
-                        "operation": "add_conversation_turn",
-                        "session_id": session_id,
-                        "question": question[:50]
-                    })
-                    logger.warning(f"Failed to add conversation turn: {str(e)} - Error ID: {error_id}")
-
-            logger.info(f"Generated response in {response_time:.2f}s with {len(citations)} citations")
+            logger.info(f"Generated response in {response_time:.3f}s with {len(citations)} citations")
             return chat_response
 
         except asyncio.TimeoutError:
             error_id = log_error_with_context(asyncio.TimeoutError(f"Timeout processing question: {question[:50]}..."), {
                 "operation": "answer_question",
-                "session_id": session_id,
                 "question": question[:50]
             })
             logger.error(f"Timeout processing question: {question[:50]}... - Error ID: {error_id}")
             # Return a helpful response instead of failing
+            response_time = max(time.time() - start_time, 0.001)
             return ChatResponse(
                 response="I'm sorry, but I'm taking too long to process your question. Please try rephrasing or ask a more specific question.",
-                session_id=session_id or "unknown",
                 citations=[],
                 retrieved_context_count=0,
-                response_time=time.time() - start_time
+                response_time=response_time
             )
         except Exception as e:
             error_id = log_error_with_context(e, {
                 "operation": "answer_question",
-                "session_id": session_id,
                 "question": question[:50]
             })
             logger.error(f"Error answering question '{question[:30]}...': {str(e)} - Error ID: {error_id}")
             # Return a graceful error response instead of raising exception
             # This allows the API route to return a proper response instead of an HTTP error
+            response_time = max(time.time() - start_time, 0.001)
             return ChatResponse(
                 response="I'm sorry, but I encountered an error while processing your question. Please try again.",
-                session_id=session_id or "unknown",
                 citations=[],
                 retrieved_context_count=0,
-                response_time=time.time() - start_time
+                response_time=response_time
             )
 
-    @debug_trace(include_args=False, include_result=False, log_level="DEBUG")
-    @log_data_flow(operation="generate_answer_with_context")
-    @handle_exceptions(
-        fallback_return="I encountered an error while generating a response. Please try again.",
-        log_error=True,
-        reraise=False,
-        include_system_diagnostics=True
-    )
     async def _generate_answer_with_context(
         self,
         question: str,
@@ -207,30 +150,73 @@ class TextbookAgent:
         # Filter out repetitive or low-quality contexts before formatting
         filtered_contexts = self._filter_repetitive_contexts(retrieved_contexts)
 
-        # If no contexts after filtering or originally empty, provide a general response
+        # If no contexts after filtering or originally empty, still attempt to answer with general knowledge
         if not filtered_contexts:
             logger.info(f"No relevant contexts found for question: {question[:50]}...")
-            # Use the LLM to answer based on its general knowledge, but with appropriate disclaimer
-            prompt = f"Question: {question}\n\nYou are an AI assistant. I couldn't find specific textbook content relevant to this question. Provide a general answer if possible, or explain that you don't have specific textbook information for this query."
+            # Instead of returning a failure message, build a prompt that allows the LLM to use general knowledge
+            # but still acknowledge the context limitation
+            prompt = f"You are an expert assistant for a Physical AI and Robotics textbook. " \
+                     f"Answer the user's question to the best of your ability. " \
+                     f"Note that no specific textbook content was retrieved for this query, " \
+                     f"but please provide helpful information based on your general knowledge " \
+                     f"of AI, robotics, and related fields.\n\n" \
+                     f"USER QUESTION: {question}\n\n" \
+                     f"ANSWER INSTRUCTIONS:\n" \
+                     f"- Provide the best possible answer based on your knowledge\n" \
+                     f"- If the topic is related to Physical AI, Robotics, Vision-Language-Action models, or Humanoid Control, " \
+                     f"provide comprehensive explanations\n" \
+                     f"- Be helpful and informative even without specific textbook context\n" \
+                     f"- Mention if the information is from general knowledge rather than the textbook if relevant"
+
+        # Only build the full prompt with context if we have contexts
+        if filtered_contexts:
+            # Format the retrieved contexts for the LLM
+            formatted_context = self._format_context_for_llm(filtered_contexts)
+
+            # For stateless operation, we don't use conversation history
+            # Build the prompt with context
+            detail_level = (user_preferences or {}).get('detail_level', 'intermediate')
+            response_format = (user_preferences or {}).get('response_format', 'detailed')
+
+            prompt = self._build_prompt(
+                question=question,
+                context=formatted_context,
+                conversation_history="",  # No conversation history in stateless operation
+                detail_level=detail_level,
+                response_format=response_format
+            )
+
+        try:
+            # Check if client is available (API keys are properly configured)
+            if self.client is None:
+                logger.warning("No LLM client configured. Returning helpful error message.")
+                return ("I'm sorry, but I'm currently experiencing issues with the AI service due to missing or invalid API key configuration. "
+                        "Please contact the system administrator to update the API key settings.")
 
             try:
-                messages = [
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are an expert assistant for a Physical AI textbook. "
-                            "If you have specific information from the textbook context provided, use that. "
-                            "If no context is provided, you may use your general knowledge to provide a helpful response, "
-                            "but acknowledge that it's not from the specific textbook content."
-                        )
-                    },
-                    {
+                # Use OpenAI-compatible API to generate the response
+                if self.client is not None and hasattr(self.client, 'chat') and hasattr(self.client.chat, 'completions'):
+                    messages = [
+                        {
+                            "role": "system",
+                            "content": (
+                                "You are an expert assistant for a Physical AI and Robotics textbook. "
+                                "When textbook context is provided, answer questions based on that context. "
+                                "When no textbook context is provided, use your general knowledge of AI, robotics, and related fields "
+                                "to provide helpful and accurate information. "
+                                "Always provide source citations for information from the textbook context. "
+                                "Consider the conversation history when answering follow-up questions. "
+                                "IMPORTANT: Do not repeat or include repetitive phrases like 'Complete Learning Path' multiple times in your response. "
+                                "For technical concepts like Vision-Language-Action models or Humanoid Control, provide comprehensive explanations."
+                            )
+                        }
+                    ]
+
+                    messages.append({
                         "role": "user",
                         "content": prompt
-                    }
-                ]
+                    })
 
-                try:
                     response = await self.client.chat.completions.create(
                         model=self.model,
                         messages=messages,
@@ -238,104 +224,21 @@ class TextbookAgent:
                         temperature=settings.temperature
                     )
 
+                    # Handle OpenAI response structure
                     if not response or not hasattr(response, 'choices') or not response.choices:
-                        logger.warning("Empty or invalid response from LLM in fallback")
-                        return f"I understand you're asking about '{question}'. I don't have specific textbook content for this query, but I'm here to help. Could you try rephrasing your question?"
-
-                    first_choice = response.choices[0]
-                    if not hasattr(first_choice, 'message') or not hasattr(first_choice.message, 'content'):
-                        logger.warning("Response choice missing message content in fallback")
-                        return f"I understand you're asking about '{question}'. I don't have specific textbook content for this query, but I'm here to help. Could you try rephrasing your question?"
-
-                    answer = first_choice.message.content
-                except Exception as llm_error:
-                    logger.error(f"Error calling LLM API in fallback: {str(llm_error)}")
-                    # Provide a helpful response without depending on the LLM
-                    return f"I understand you're asking about '{question}'. I don't have specific textbook content for this query, but I'm here to help. Could you try rephrasing your question?"
-
-                if answer:
-                    answer = answer.strip()
+                        logger.warning("Empty or invalid response from LLM")
+                        answer = "I'm sorry, but I couldn't generate a response for your question."
+                    else:
+                        first_choice = response.choices[0]
+                        if not hasattr(first_choice, 'message') or not hasattr(first_choice.message, 'content'):
+                            logger.warning("Response choice missing message content")
+                            answer = "I'm sorry, but I couldn't generate a response for your question."
+                        else:
+                            answer = first_choice.message.content
                 else:
-                    answer = f"I understand you're asking about '{question}'. I don't have specific textbook content for this query, but I'm here to help. Could you try rephrasing your question?"
+                    logger.warning("No LLM client configured or client type not supported")
+                    answer = "I'm sorry, but I couldn't generate a response for your question."
 
-                logger.debug(f"Generated general answer: {answer[:100] if answer else 'None'}...")
-                return answer
-            except Exception as e:
-                logger.error(f"Error generating general answer: {str(e)}")
-                return f"I understand you're asking about '{question}'. I don't have specific textbook content for this query, but I'm here to help. Could you try rephrasing your question?"
-
-        # Format the retrieved contexts for the LLM
-        formatted_context = self._format_context_for_llm(filtered_contexts)
-
-        # Format the conversation history if provided
-        formatted_conversation = ""
-        if conversation_context:
-            formatted_conversation = self._format_conversation_history(conversation_context)
-
-        # Build the prompt with context
-        detail_level = (user_preferences or {}).get('detail_level', 'intermediate')
-        response_format = (user_preferences or {}).get('response_format', 'detailed')
-
-        prompt = self._build_prompt(
-            question=question,
-            context=formatted_context,
-            conversation_history=formatted_conversation,
-            detail_level=detail_level,
-            response_format=response_format
-        )
-
-        try:
-            # Call OpenAI API to generate the response
-            messages = [
-                {
-                    "role": "system",
-                    "content": (
-                        "You are an expert assistant for a Physical AI textbook. "
-                        "Answer questions based ONLY on the provided context from the textbook. "
-                        "Do not hallucinate or provide information outside the provided context. "
-                        "Always provide source citations for the information you provide. "
-                        "Consider the conversation history when answering follow-up questions."
-                        "IMPORTANT: Do not repeat or include repetitive phrases like 'Complete Learning Path' multiple times in your response."
-                    )
-                }
-            ]
-
-            # Add conversation history to the messages if available
-            if formatted_conversation:
-                messages.append({
-                    "role": "system",
-                    "content": f"Previous conversation:\n{formatted_conversation}"
-                })
-
-            messages.append({
-                "role": "user",
-                "content": prompt
-            })
-
-            try:
-                response = await self.client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    max_tokens=settings.max_response_tokens,
-                    temperature=settings.temperature
-                )
-            except Exception as llm_error:
-                logger.error(f"Error calling LLM API: {str(llm_error)}")
-                # Return a helpful response instead of failing completely
-                return "I'm sorry, but I'm having trouble connecting to the AI service right now. Please try again later."
-
-            # Handle potential issues with the response structure
-            try:
-                if not response or not hasattr(response, 'choices') or not response.choices:
-                    logger.warning("Empty or invalid response from LLM")
-                    return "I'm sorry, but I couldn't generate a response for your question."
-
-                first_choice = response.choices[0]
-                if not hasattr(first_choice, 'message') or not hasattr(first_choice.message, 'content'):
-                    logger.warning("Response choice missing message content")
-                    return "I'm sorry, but I couldn't generate a response for your question."
-
-                answer = first_choice.message.content
                 if answer:
                     answer = answer.strip()
                 else:
@@ -352,17 +255,29 @@ class TextbookAgent:
                     cleaned_answer = answer  # Use original answer if cleaning fails
 
                 return cleaned_answer
-            except Exception as response_error:
-                logger.error(f"Error processing LLM response: {str(response_error)}")
-                return "I'm sorry, but I had trouble processing the response. Please try again."
+            except Exception as llm_error:
+                logger.error(f"Error calling LLM API: {str(llm_error)}")
+
+                # Check if it's an API key issue specifically
+                if "leaked" in str(llm_error).lower() or "permission_denied" in str(llm_error).lower():
+                    logger.error("API key issue detected - likely leaked key")
+                    return ("I'm sorry, but I'm currently experiencing issues with the AI service due to an API key problem. "
+                            "This may require updating the API key configuration. Please contact the system administrator.")
+                elif "not found" in str(llm_error).lower() or "model" in str(llm_error).lower():
+                    logger.error("Model not found issue detected")
+                    return ("I'm sorry, but I'm having trouble connecting to the AI service. "
+                            "The configured model might not be available. Please try again later.")
+                else:
+                    # Return a helpful response instead of failing completely
+                    return "I'm sorry, but I'm having trouble connecting to the AI service right now. Please try again later."
 
         except Exception as e:
             error_id = log_error_with_context(e, {
-                "operation": "openai_api_call",
+                "operation": "llm_api_call",
                 "question": question[:50],
                 "model": settings.agent_model
             })
-            logger.error(f"Error calling OpenAI API: {str(e)} - Error ID: {error_id}")
+            logger.error(f"Error calling LLM API: {str(e)} - Error ID: {error_id}")
             raise
 
     def _format_conversation_history(self, conversation_history: List[Dict[str, str]]) -> str:
@@ -411,12 +326,12 @@ class TextbookAgent:
         self,
         question: str,
         context: str,
-        conversation_history: str = "",
+        conversation_history: str = "",  # Not used in stateless operation
         detail_level: str = "intermediate",
         response_format: str = "detailed"
     ) -> str:
         """
-        Build the prompt for the LLM based on user preferences and conversation history
+        Build the prompt for the LLM based on user preferences
         """
         detail_instructions = {
             "basic": "Provide a simple, straightforward answer.",
@@ -430,34 +345,25 @@ class TextbookAgent:
             "examples": "Include relevant examples from the context."
         }
 
-        if conversation_history:
-            prompt = (
-                f"Based on the following textbook content and conversation history, please answer the question.\n\n"
-                f"TEXTBOOK CONTENT:\n{context}\n\n"
-                f"CONVERSATION HISTORY:\n{conversation_history}\n\n"
-                f"QUESTION: {question}\n\n"
-                f"INSTRUCTIONS:\n"
-                f"- Answer only based on the provided textbook content\n"
-                f"- Do not provide information not found in the textbook\n"
-                f"- Always cite the source of your information\n"
-                f"- Consider the conversation history when answering follow-up questions\n"
-                f"- {detail_instructions.get(detail_level, detail_instructions['intermediate'])}\n"
-                f"- {format_instructions.get(response_format, format_instructions['detailed'])}\n"
-                f"- If the textbook content doesn't contain the answer, clearly state that\n"
-            )
-        else:
-            prompt = (
-                f"Based on the following textbook content, please answer the question.\n\n"
-                f"TEXTBOOK CONTENT:\n{context}\n\n"
-                f"QUESTION: {question}\n\n"
-                f"INSTRUCTIONS:\n"
-                f"- Answer only based on the provided textbook content\n"
-                f"- Do not provide information not found in the textbook\n"
-                f"- Always cite the source of your information\n"
-                f"- {detail_instructions.get(detail_level, detail_instructions['intermediate'])}\n"
-                f"- {format_instructions.get(response_format, format_instructions['detailed'])}\n"
-                f"- If the textbook content doesn't contain the answer, clearly state that\n"
-            )
+        prompt = (
+            f"You are an expert assistant for a Physical AI and Robotics textbook. "
+            f"Answer the user's question based ONLY on the provided textbook content. "
+            f"Do not hallucinate or provide information outside the provided context. "
+            f"Always provide source citations for the information you provide.\n\n"
+
+            f"TEXTBOOK CONTENT:\n{context}\n\n"
+            f"USER QUESTION: {question}\n\n"
+
+            f"ANSWER INSTRUCTIONS:\n"
+            f"- Answer only based on the provided textbook content\n"
+            f"- Do not provide information not found in the textbook\n"
+            f"- Always cite the source of your information\n"
+            f"- {detail_instructions.get(detail_level, detail_instructions['intermediate'])}\n"
+            f"- {format_instructions.get(response_format, format_instructions['detailed'])}\n"
+            f"- If the textbook content doesn't contain the answer, clearly state: 'I couldn't find specific information about this in the textbook content.'\n"
+            f"- For technical concepts like Vision-Language-Action models or Humanoid Control, provide comprehensive explanations if available in the context\n"
+            f"- Do not repeat or include repetitive phrases like 'Complete Learning Path' multiple times in your response\n"
+        )
 
         return prompt
 
@@ -482,14 +388,6 @@ class TextbookAgent:
 
         return citations
 
-    @debug_trace(include_args=False, include_result=False, log_level="DEBUG")
-    @log_data_flow(operation="validate_answer_grounding")
-    @handle_exceptions(
-        fallback_return=False,
-        log_error=True,
-        reraise=False,
-        include_system_diagnostics=True
-    )
     async def validate_answer_grounding(
         self,
         question: str,
@@ -613,14 +511,6 @@ class TextbookAgent:
             logger.error(f"Error in _remove_repetitive_content: {str(e)}")
             return text  # Return original text if processing fails
 
-    @debug_trace(include_args=False, include_result=False, log_level="DEBUG")
-    @log_data_flow(operation="validate_citations")
-    @handle_exceptions(
-        fallback_return={"valid": False, "details": ["Error occurred during citation validation"]},
-        log_error=True,
-        reraise=False,
-        include_system_diagnostics=True
-    )
     def validate_citations(self, citations: List[Citation], retrieved_contexts: List[RetrievedContext]) -> Dict[str, Any]:
         """
         Validate that all responses include proper source citations

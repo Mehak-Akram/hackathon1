@@ -5,15 +5,12 @@ import time
 import asyncio
 from typing import Dict, Any, Optional
 from ..agents.textbook_agent import textbook_agent
-from ..services.conversation import conversation_service
 from ..services.validation import validation_service
 from ..api.models.request import ChatRequest
-from ..api.models.response import ChatResponse
+from ..api.models.response import ChatResponse, AgentResponse
 from ..utils.logger import get_logger
 from ..utils.helpers import time_it_async
 from ..config.settings import settings
-from ..utils.error_handler import handle_exceptions, debug_context, error_handler
-from ..utils.debug_utils import debug_trace, debug_performance_monitor, log_data_flow
 
 
 logger = get_logger(__name__)
@@ -25,19 +22,9 @@ class AgentService:
     """
     def __init__(self):
         self.textbook_agent = textbook_agent
-        self.conversation_service = conversation_service
         self.validation_service = validation_service
 
     @time_it_async
-    @debug_trace(include_args=True, include_result=False, log_level="DEBUG")
-    @debug_performance_monitor(time_threshold=5.0, memory_threshold=50.0)
-    @log_data_flow(operation="agent_service_process_request")
-    @handle_exceptions(
-        fallback_return=None,
-        log_error=True,
-        reraise=False,
-        include_system_diagnostics=True
-    )
     async def process_request(self, chat_request: ChatRequest) -> ChatResponse:
         """
         Process a chat request through all service components with error handling and fallbacks
@@ -50,40 +37,25 @@ class AgentService:
         # Initialize default response in case of errors
         fallback_response = ChatResponse(
             response="I'm sorry, but I encountered an issue while processing your request. Please try again later.",
-            session_id=chat_request.session_id or "unknown",
             citations=[],
             retrieved_context_count=0,
-            response_time=0.0
+            response_time=0.001  # Ensure minimum response time to satisfy validation
         )
 
         try:
-            # Step 1: Get conversation context if session exists
-            conversation_context = []
-            try:
-                if chat_request.session_id:
-                    conversation_context = await self.conversation_service.get_conversation_context(
-                        chat_request.session_id, max_turns=5
-                    )
-                    logger.debug(f"[{request_id}] Retrieved {len(conversation_context)} conversation turns")
-            except Exception as e:
-                logger.warning(f"[{request_id}] Failed to retrieve conversation context: {str(e)}. Proceeding without context.")
-                # Continue with empty conversation context as fallback
-
-            # Step 2: Process the request with the textbook agent
+            # Process the request with the textbook agent (stateless operation)
             try:
                 response = await self.textbook_agent.answer_question(
                     question=chat_request.question,
-                    session_id=chat_request.session_id,
                     user_preferences=chat_request.user_preferences.dict() if chat_request.user_preferences else None
                 )
             except Exception as e:
                 logger.error(f"[{request_id}] Textbook agent failed: {str(e)}. Attempting fallback.")
 
-                # Fallback: try a simpler approach without conversation context
+                # Fallback: try a simpler approach without user preferences
                 try:
                     response = await self.textbook_agent.answer_question(
                         question=chat_request.question,
-                        session_id=chat_request.session_id,
                         user_preferences=None  # Ignore user preferences in fallback
                     )
                     logger.info(f"[{request_id}] Fallback agent processing succeeded")
@@ -92,11 +64,11 @@ class AgentService:
                     # Return the initialized fallback response with error info
                     error_msg = f"I'm sorry, but I encountered an issue while processing your request about '{chat_request.question[:50]}...'. Please try again later."
                     fallback_response.response = error_msg
-                    total_time = time.time() - start_time
+                    total_time = max(time.time() - start_time, 0.001)  # Ensure minimum response time
                     fallback_response.response_time = total_time
                     return fallback_response
 
-            # Step 3: Validate the response and citations
+            # Validate the response and citations
             try:
                 validation_result = self.validation_service.validate_response_citations(
                     response=response
@@ -107,29 +79,24 @@ class AgentService:
             except Exception as e:
                 logger.warning(f"[{request_id}] Response validation failed: {str(e)}. Proceeding with response.")
 
-            # Step 4: Add the conversation turn to history
-            try:
-                if chat_request.session_id:
-                    await self.conversation_service.add_conversation_turn(
-                        chat_request.session_id,
-                        chat_request.question,
-                        response.response
-                    )
-                    logger.debug(f"[{request_id}] Conversation history updated")
-            except Exception as e:
-                logger.warning(f"[{request_id}] Failed to update conversation history: {str(e)}. Continuing.")
-
-            # Calculate total processing time
-            total_time = time.time() - start_time
+            # Calculate total processing time ensuring it's always above the minimum
+            total_time = max(time.time() - start_time, 0.001)
             response.response_time = total_time
 
+            # Ensure response is not empty and response_time is valid
+            if not response.response or not response.response.strip():
+                response.response = "I'm sorry, but I couldn't generate a response for your question. Please try asking something else."
+
+            if response.response_time <= 0:
+                response.response_time = total_time
+
             # Log performance metrics
-            logger.info(f"[{request_id}] Processed request in {total_time:.2f}s "
+            logger.info(f"[{request_id}] Processed request in {response.response_time:.3f}s "
                        f"with {len(response.citations)} citations")
 
             # Performance tracking: log slow requests
-            if total_time > 10.0:  # Log requests taking more than 10 seconds
-                logger.warning(f"[{request_id}] Slow request detected: {total_time:.2f}s")
+            if response.response_time > 10.0:  # Log requests taking more than 10 seconds
+                logger.warning(f"[{request_id}] Slow request detected: {response.response_time:.3f}s")
 
             return response
 
@@ -137,20 +104,10 @@ class AgentService:
             logger.error(f"[{request_id}] Critical error processing chat request: {str(e)}", exc_info=True)
 
             # Final fallback: return a safe response
-            total_time = time.time() - start_time
+            total_time = max(time.time() - start_time, 0.001)  # Ensure minimum response time
             fallback_response.response_time = total_time
-            fallback_response.session_id = chat_request.session_id or fallback_response.session_id
             return fallback_response
 
-    @debug_trace(include_args=True, include_result=False, log_level="DEBUG")
-    @debug_performance_monitor(time_threshold=10.0, memory_threshold=75.0)
-    @log_data_flow(operation="agent_service_circuit_breaker")
-    @handle_exceptions(
-        fallback_return=None,
-        log_error=True,
-        reraise=True,
-        include_system_diagnostics=True
-    )
     async def process_request_with_circuit_breaker(self, chat_request: ChatRequest, max_retries: int = 2) -> ChatResponse:
         """
         Process a request with circuit breaker pattern and retry logic
@@ -183,15 +140,6 @@ class AgentService:
         # If all retries failed, raise the last exception
         raise last_exception
 
-    @debug_trace(include_args=True, include_result=False, log_level="DEBUG")
-    @debug_performance_monitor(time_threshold=15.0, memory_threshold=100.0)
-    @log_data_flow(operation="agent_service_detailed_logging")
-    @handle_exceptions(
-        fallback_return=None,
-        log_error=True,
-        reraise=True,
-        include_system_diagnostics=True
-    )
     async def process_request_with_detailed_logging(self, chat_request: ChatRequest) -> Dict[str, Any]:
         """
         Process a request with detailed performance and logging information
@@ -204,7 +152,6 @@ class AgentService:
         processing_log = {
             "request_id": request_id,
             "question": chat_request.question,
-            "session_id": chat_request.session_id,
             "start_time": start_time,
             "steps": [],
             "errors": [],
@@ -213,26 +160,10 @@ class AgentService:
         }
 
         try:
-            # Step 1: Get conversation context
-            context_start = time.time()
-            conversation_context = []
-            if chat_request.session_id:
-                conversation_context = await self.conversation_service.get_conversation_context(
-                    chat_request.session_id, max_turns=5
-                )
-            context_time = time.time() - context_start
-
-            processing_log["steps"].append({
-                "step": "get_conversation_context",
-                "time": context_time,
-                "details": f"Retrieved {len(conversation_context)} turns"
-            })
-
-            # Step 2: Process with textbook agent
+            # Step 1: Process with textbook agent (stateless operation)
             agent_start = time.time()
             response = await self.textbook_agent.answer_question(
                 question=chat_request.question,
-                session_id=chat_request.session_id,
                 user_preferences=chat_request.user_preferences.dict() if chat_request.user_preferences else None
             )
             agent_time = time.time() - agent_start
@@ -243,7 +174,7 @@ class AgentService:
                 "details": f"Generated response with {len(response.citations)} citations"
             })
 
-            # Step 3: Validate response
+            # Step 2: Validate response
             validation_start = time.time()
             validation_result = self.validation_service.validate_response_citations(
                 response=response
@@ -254,22 +185,6 @@ class AgentService:
                 "step": "response_validation",
                 "time": validation_time,
                 "details": f"Validation result: {validation_result['valid']}"
-            })
-
-            # Step 4: Update conversation history
-            history_start = time.time()
-            if chat_request.session_id:
-                await self.conversation_service.add_conversation_turn(
-                    chat_request.session_id,
-                    chat_request.question,
-                    response.response
-                )
-            history_time = time.time() - history_start
-
-            processing_log["steps"].append({
-                "step": "update_conversation_history",
-                "time": history_time,
-                "details": "History updated successfully"
             })
 
             # Finalize timing
@@ -310,7 +225,6 @@ class AgentService:
             "timestamp": time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime()),
             "components": {
                 "textbook_agent": {"status": "unknown", "details": {}},
-                "conversation_service": {"status": "unknown", "details": {}},
                 "validation_service": {"status": "unknown", "details": {}}
             },
             "overall_response_time": 0.0
@@ -325,17 +239,6 @@ class AgentService:
         except Exception as e:
             health_status["components"]["textbook_agent"]["status"] = "unhealthy"
             health_status["components"]["textbook_agent"]["details"]["error"] = str(e)
-            health_status["status"] = "unhealthy"
-
-        try:
-            # Test conversation service
-            test_session = await self.conversation_service.create_session()
-            await self.conversation_service.end_session(test_session.id)
-            health_status["components"]["conversation_service"]["status"] = "healthy"
-            health_status["components"]["conversation_service"]["details"]["connected"] = True
-        except Exception as e:
-            health_status["components"]["conversation_service"]["status"] = "unhealthy"
-            health_status["components"]["conversation_service"]["details"]["error"] = str(e)
             health_status["status"] = "unhealthy"
 
         try:
@@ -355,12 +258,8 @@ class AgentService:
         """
         Get metrics about service usage and performance
         """
-        active_sessions = await self.conversation_service.get_all_active_sessions()
-
         metrics = {
             "timestamp": time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime()),
-            "active_sessions": len(active_sessions),
-            "session_timeout_minutes": settings.session_timeout_minutes,
             "default_top_k": settings.default_top_k,
             "agent_model": settings.agent_model,
             "estimated_daily_requests": 0,  # Would be calculated from logs in a real implementation
